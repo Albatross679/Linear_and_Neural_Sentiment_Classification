@@ -845,8 +845,8 @@ def plot_neural_metrics(all_metrics: dict, output_dir: str = "media"):
 def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings) -> NeuralSentimentClassifier:
     """
     Main entry point for your deep averaging network model.
-    Trains all 4 neural scenarios (DAN, DAN+B, LSTM, CNN), generates plots,
-    and returns the primary DAN (batch_size=1) classifier for evaluation.
+    When --no_run_on_test is passed, trains all 4 neural scenarios and generates plots.
+    Otherwise, trains only the DAN model for autograder evaluation.
     """
     hidden_size = 150
     num_epochs = 20
@@ -855,49 +855,95 @@ def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_ex
     dropout = 0.3
     embedding_dim = word_embeddings.get_embedding_length()
 
-    all_metrics = {}
+    # When run_on_test is True (autograder), only train the single DAN model
+    run_all = not args.run_on_test
 
-    # Define the 4 experiments: (name, network_class, batch_size)
-    experiments = [
-        ("DAN", DeepAveragingNetwork, 1),
-        ("DAN+B", DeepAveragingNetwork, 32),
-        ("LSTM", LSTMSentimentClassifier, 32),
-        ("CNN", CNNSentimentClassifier, 32),
-    ]
+    if run_all:
+        all_metrics = {}
 
-    dan_network = None  # Will hold the primary DAN network for return
+        # Define the 4 experiments: (name, network_class, batch_size)
+        experiments = [
+            ("DAN", DeepAveragingNetwork, 1),
+            ("DAN+B", DeepAveragingNetwork, 32),
+            ("LSTM", LSTMSentimentClassifier, 32),
+            ("CNN", CNNSentimentClassifier, 32),
+        ]
 
-    for name, NetworkClass, batch_size in experiments:
-        print(f"\n--- Training {name} (batch_size={batch_size}) ---")
+        dan_network = None
 
-        # Reset seeds for reproducibility
+        for name, NetworkClass, batch_size in experiments:
+            print(f"\n--- Training {name} (batch_size={batch_size}) ---")
+
+            # Reset seeds for reproducibility
+            random.seed(42)
+            np.random.seed(42)
+            torch.manual_seed(42)
+            torch.cuda.manual_seed_all(42)
+
+            # Fresh embedding layer per model
+            embedding_layer = word_embeddings.get_initialized_embedding_layer(frozen=True)
+
+            # Create network
+            network = NetworkClass(embedding_layer, embedding_dim, hidden_size, num_classes=2, dropout=dropout)
+
+            # Train with metrics
+            trained_network, metrics = _train_neural_with_metrics(
+                network, train_exs, dev_exs, word_embeddings,
+                batch_size=batch_size, num_epochs=num_epochs, lr=lr, weight_decay=weight_decay
+            )
+
+            all_metrics[name] = metrics
+
+            if name == "DAN":
+                dan_network = trained_network
+
+        # Generate plots
+        plot_neural_metrics(all_metrics, output_dir="media")
+
+        return NeuralSentimentClassifier(dan_network, word_embeddings)
+    else:
+        # Autograder path: train only the DAN model
         random.seed(42)
         np.random.seed(42)
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
 
-        # Fresh embedding layer per model
         embedding_layer = word_embeddings.get_initialized_embedding_layer(frozen=True)
+        network = DeepAveragingNetwork(embedding_layer, embedding_dim, hidden_size, num_classes=2, dropout=dropout)
+        network.to(device)
 
-        # Create network
-        network = NetworkClass(embedding_layer, embedding_dim, hidden_size, num_classes=2, dropout=dropout)
+        optimizer = optim.Adam(network.parameters(), lr=lr, weight_decay=weight_decay)
+        loss_fn = nn.NLLLoss()
+        word_indexer = word_embeddings.word_indexer
 
-        # Train with metrics
-        trained_network, metrics = _train_neural_with_metrics(
-            network, train_exs, dev_exs, word_embeddings,
-            batch_size=batch_size, num_epochs=num_epochs, lr=lr, weight_decay=weight_decay
-        )
+        network.train()
+        for epoch in range(num_epochs):
+            indices = list(range(len(train_exs)))
+            random.shuffle(indices)
+            total_loss = 0.0
+            num_batches = 0
 
-        all_metrics[name] = metrics
+            for i in indices:
+                ex = train_exs[i]
+                word_indices = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
+                word_indices = [idx if idx != -1 else 1 for idx in word_indices]
 
-        # Keep the primary DAN (batch_size=1) for return
-        if name == "DAN":
-            dan_network = trained_network
+                x = torch.tensor(word_indices, dtype=torch.long).to(device)
+                y = torch.tensor(ex.label, dtype=torch.long).to(device)
 
-    # Generate plots
-    plot_neural_metrics(all_metrics, output_dir="media")
+                optimizer.zero_grad()
+                log_probs = network(x)
+                loss = loss_fn(log_probs.unsqueeze(0), y.unsqueeze(0))
+                loss.backward()
+                optimizer.step()
 
-    return NeuralSentimentClassifier(dan_network, word_embeddings)
+                total_loss += loss.item()
+                num_batches += 1
+
+            avg_loss = total_loss / num_batches
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.4f}")
+
+        return NeuralSentimentClassifier(network, word_embeddings)
 
 
 def train_lstm_classifier(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings) -> NeuralSentimentClassifier:
