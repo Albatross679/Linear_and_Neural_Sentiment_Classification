@@ -6,8 +6,8 @@ from torch import optim
 import numpy as np
 import random
 from typing import List
-from sentiment_data import *
-from utils import *
+from src.sentiment_data import *
+from utilities.utils import *
 from collections import Counter
 
 
@@ -221,9 +221,10 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
         features = feat_extractor.extract_features(ex.words, add_to_indexer=True)
         train_features.append(features)
     
-    # Initialize weights
+    # Initialize weights with random values for better convergence
     num_features = len(feat_extractor.get_indexer())
-    weights = np.zeros(num_features)
+    np.random.seed(42)  # Fixed seed for reproducibility
+    weights = np.random.uniform(-0.1, 0.1, num_features)
     
     # Hyperparameters
     num_epochs = 30
@@ -592,4 +593,214 @@ def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_ex
         avg_loss = total_loss / len(train_exs)
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.4f}")
     
+    return NeuralSentimentClassifier(network, word_embeddings)
+
+
+def train_lstm_classifier(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings) -> NeuralSentimentClassifier:
+    """
+    Train an LSTM-based sentiment classifier.
+    :param args: Command-line args
+    :param train_exs: training examples
+    :param dev_exs: development set
+    :param word_embeddings: set of loaded word embeddings
+    :return: A trained NeuralSentimentClassifier model
+    """
+    # Get embedding layer
+    embedding_layer = word_embeddings.get_initialized_embedding_layer(frozen=True)
+    embedding_dim = word_embeddings.get_embedding_length()
+    hidden_size = args.hidden_size
+
+    # Create network
+    network = LSTMSentimentClassifier(embedding_layer, embedding_dim, hidden_size, num_classes=2, dropout=0.3)
+
+    # Optimizer
+    optimizer = optim.Adam(network.parameters(), lr=args.lr)
+
+    # Loss function
+    loss_fn = nn.NLLLoss()
+
+    # Training
+    num_epochs = args.num_epochs
+    batch_size = args.batch_size
+    word_indexer = word_embeddings.word_indexer
+
+    network.train()
+
+    for epoch in range(num_epochs):
+        # Shuffle training data
+        indices = list(range(len(train_exs)))
+        random.shuffle(indices)
+
+        total_loss = 0.0
+
+        if batch_size == 1:
+            # Non-batched training
+            for i in indices:
+                ex = train_exs[i]
+
+                # Convert words to indices
+                word_indices = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
+                word_indices = [idx if idx != -1 else 1 for idx in word_indices]
+
+                # Create tensors
+                x = torch.tensor(word_indices, dtype=torch.long)
+                y = torch.tensor(ex.label, dtype=torch.long)
+
+                # Forward pass
+                optimizer.zero_grad()
+                log_probs = network(x)
+                loss = loss_fn(log_probs.unsqueeze(0), y.unsqueeze(0))
+
+                # Backward pass
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+        else:
+            # Batched training
+            for batch_start in range(0, len(indices), batch_size):
+                batch_indices = indices[batch_start:batch_start + batch_size]
+
+                # Prepare batch
+                batch_words = []
+                batch_labels = []
+                lengths = []
+
+                for i in batch_indices:
+                    ex = train_exs[i]
+                    word_idx = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
+                    word_idx = [idx if idx != -1 else 1 for idx in word_idx]
+                    batch_words.append(word_idx)
+                    batch_labels.append(ex.label)
+                    lengths.append(len(word_idx))
+
+                # Pad sequences
+                max_len = max(lengths)
+                padded = [w + [0] * (max_len - len(w)) for w in batch_words]
+
+                # Create tensors
+                x = torch.tensor(padded, dtype=torch.long)
+                y = torch.tensor(batch_labels, dtype=torch.long)
+                lengths_tensor = torch.tensor(lengths, dtype=torch.long)
+
+                # Forward pass
+                optimizer.zero_grad()
+                log_probs = network(x, lengths_tensor)
+                loss = loss_fn(log_probs, y)
+
+                # Backward pass
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+
+        # Print progress
+        avg_loss = total_loss / len(train_exs)
+        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.4f}")
+
+    return NeuralSentimentClassifier(network, word_embeddings)
+
+
+def train_cnn_classifier(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings) -> NeuralSentimentClassifier:
+    """
+    Train a CNN-based sentiment classifier.
+    :param args: Command-line args
+    :param train_exs: training examples
+    :param dev_exs: development set
+    :param word_embeddings: set of loaded word embeddings
+    :return: A trained NeuralSentimentClassifier model
+    """
+    # Get embedding layer
+    embedding_layer = word_embeddings.get_initialized_embedding_layer(frozen=True)
+    embedding_dim = word_embeddings.get_embedding_length()
+    hidden_size = args.hidden_size
+
+    # Create network
+    network = CNNSentimentClassifier(embedding_layer, embedding_dim, hidden_size, num_classes=2, dropout=0.3)
+
+    # Optimizer
+    optimizer = optim.Adam(network.parameters(), lr=args.lr)
+
+    # Loss function
+    loss_fn = nn.NLLLoss()
+
+    # Training
+    num_epochs = args.num_epochs
+    batch_size = args.batch_size
+    word_indexer = word_embeddings.word_indexer
+
+    network.train()
+
+    for epoch in range(num_epochs):
+        # Shuffle training data
+        indices = list(range(len(train_exs)))
+        random.shuffle(indices)
+
+        total_loss = 0.0
+
+        if batch_size == 1:
+            # Non-batched training
+            for i in indices:
+                ex = train_exs[i]
+
+                # Convert words to indices
+                word_indices = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
+                word_indices = [idx if idx != -1 else 1 for idx in word_indices]
+
+                # Create tensors
+                x = torch.tensor(word_indices, dtype=torch.long)
+                y = torch.tensor(ex.label, dtype=torch.long)
+
+                # Forward pass
+                optimizer.zero_grad()
+                log_probs = network(x)
+                loss = loss_fn(log_probs.unsqueeze(0), y.unsqueeze(0))
+
+                # Backward pass
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+        else:
+            # Batched training
+            for batch_start in range(0, len(indices), batch_size):
+                batch_indices = indices[batch_start:batch_start + batch_size]
+
+                # Prepare batch
+                batch_words = []
+                batch_labels = []
+                lengths = []
+
+                for i in batch_indices:
+                    ex = train_exs[i]
+                    word_idx = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
+                    word_idx = [idx if idx != -1 else 1 for idx in word_idx]
+                    batch_words.append(word_idx)
+                    batch_labels.append(ex.label)
+                    lengths.append(len(word_idx))
+
+                # Pad sequences
+                max_len = max(lengths)
+                padded = [w + [0] * (max_len - len(w)) for w in batch_words]
+
+                # Create tensors
+                x = torch.tensor(padded, dtype=torch.long)
+                y = torch.tensor(batch_labels, dtype=torch.long)
+                lengths_tensor = torch.tensor(lengths, dtype=torch.long)
+
+                # Forward pass
+                optimizer.zero_grad()
+                log_probs = network(x, lengths_tensor)
+                loss = loss_fn(log_probs, y)
+
+                # Backward pass
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+
+        # Print progress
+        avg_loss = total_loss / len(train_exs)
+        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.4f}")
+
     return NeuralSentimentClassifier(network, word_embeddings)

@@ -1,3 +1,7 @@
+# Claude Code
+.claude/
+CLAUDE.md
+
 # Virtual Environment
 .venv/
 venv/
@@ -40,9 +44,20 @@ eggs/
 ehthumbs.db
 Thumbs.db
 
-# PyTorch model checkpoints (uncomment if you want to ignore saved models)
-# *.pt
-# *.pth
+# PyTorch model checkpoints (large files)
+model/*.pt
+model/*.pth
+!model/.gitkeep
+
+# Output predictions and experiment logs
+output/*.txt
+!output/.gitkeep
+
+# Documentation (keep only specific PDFs)
+doc/*
+!doc/writeup.pdf
+!doc/CSE_5525__Assignment_1__SP_2026_.pdf
+!doc/.gitkeep
 
 # Logs
 *.log
@@ -50,3 +65,18 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# LaTeX auxiliary files
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb

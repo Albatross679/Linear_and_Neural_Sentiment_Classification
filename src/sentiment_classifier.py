@@ -4,8 +4,8 @@ import argparse
 import json
 import sys
 import time
-from models import *
-from sentiment_data import *
+from src.models import *
+from src.sentiment_data import *
 from typing import List
 
 ####################################################
