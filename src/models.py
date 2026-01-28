@@ -356,7 +356,8 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
 
 def plot_lr_metrics(all_metrics: dict, output_dir: str = "media"):
     """
-    Plot loss, train acc, dev acc over epochs for multiple configurations.
+    Plot loss and accuracy over epochs for multiple LR configurations.
+    Generates 2 plots: lr_epoch_loss.png and lr_accuracy.png.
 
     all_metrics: {
         "Unigram": {"loss": [...], "train_acc": [...], "dev_acc": [...]},
@@ -370,7 +371,6 @@ def plot_lr_metrics(all_metrics: dict, output_dir: str = "media"):
     os.makedirs(output_dir, exist_ok=True)
 
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    labels = list(all_metrics.keys())
 
     # Plot 1: Loss
     plt.figure(figsize=(8, 5))
@@ -385,32 +385,20 @@ def plot_lr_metrics(all_metrics: dict, output_dir: str = "media"):
     plt.savefig(f"{output_dir}/lr_epoch_loss.png", dpi=150, bbox_inches='tight')
     plt.close()
 
-    # Plot 2: Train Accuracy
+    # Plot 2: Combined Train + Dev Accuracy
     plt.figure(figsize=(8, 5))
     for i, (name, metrics) in enumerate(all_metrics.items()):
-        plt.plot(range(1, len(metrics["train_acc"]) + 1),
-                 [acc * 100 for acc in metrics["train_acc"]],
-                 color=colors[i % len(colors)], label=name, linewidth=1.5)
+        epochs = range(1, len(metrics["train_acc"]) + 1)
+        plt.plot(epochs, [acc * 100 for acc in metrics["train_acc"]],
+                 color=colors[i % len(colors)], linestyle='-', label=f"{name} (train)", linewidth=1.5)
+        plt.plot(epochs, [acc * 100 for acc in metrics["dev_acc"]],
+                 color=colors[i % len(colors)], linestyle='--', label=f"{name} (dev)", linewidth=1.5)
     plt.xlabel("Epoch")
-    plt.ylabel("Training Accuracy (%)")
-    plt.title("Logistic Regression Training Accuracy")
-    plt.legend()
+    plt.ylabel("Accuracy (%)")
+    plt.title("Logistic Regression Accuracy")
+    plt.legend(ncol=2, fontsize='small')
     plt.grid(True, alpha=0.3)
-    plt.savefig(f"{output_dir}/lr_train_acc.png", dpi=150, bbox_inches='tight')
-    plt.close()
-
-    # Plot 3: Dev Accuracy
-    plt.figure(figsize=(8, 5))
-    for i, (name, metrics) in enumerate(all_metrics.items()):
-        plt.plot(range(1, len(metrics["dev_acc"]) + 1),
-                 [acc * 100 for acc in metrics["dev_acc"]],
-                 color=colors[i % len(colors)], label=name, linewidth=1.5)
-    plt.xlabel("Epoch")
-    plt.ylabel("Dev Accuracy (%)")
-    plt.title("Logistic Regression Dev Accuracy")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig(f"{output_dir}/lr_dev_acc.png", dpi=150, bbox_inches='tight')
+    plt.savefig(f"{output_dir}/lr_accuracy.png", dpi=150, bbox_inches='tight')
     plt.close()
 
     print(f"LR plots saved to {output_dir}/")
@@ -689,44 +677,57 @@ class NeuralSentimentClassifier(SentimentClassifier):
         return predictions
 
 
-def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings) -> NeuralSentimentClassifier:
-    """
-    Main entry point for your deep averaging network model.
-    :param args: Command-line args so you can access them here
-    :param train_exs: training examples
-    :param dev_exs: development set, in case you wish to evaluate your model during training
-    :param word_embeddings: set of loaded word embeddings
-    :return: A trained NeuralSentimentClassifier model
-    """
-    # Fixed hyperparameters (matching train_and_plot_neural_models.py for reproducibility)
-    # lr=0.0005, num_epochs=20, hidden_size=150, weight_decay=1e-5, dropout=0.3
-    hidden_size = 150
-    num_epochs = 20
-    lr = 0.0005
-    weight_decay = 1e-5
+def _compute_neural_accuracy(network: nn.Module, examples: List[SentimentExample],
+                              word_embeddings: WordEmbeddings, batch_size: int = 256) -> float:
+    """Compute accuracy of a neural network on a set of examples."""
+    word_indexer = word_embeddings.word_indexer
+    network.eval()
+    correct = 0
+    total = len(examples)
 
-    # Get embedding layer
-    embedding_layer = word_embeddings.get_initialized_embedding_layer(frozen=True)
-    embedding_dim = word_embeddings.get_embedding_length()
+    for batch_start in range(0, total, batch_size):
+        batch_exs = examples[batch_start:batch_start + batch_size]
+        all_indices = []
+        lengths = []
+        for ex in batch_exs:
+            indices = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
+            indices = [idx if idx != -1 else 1 for idx in indices]
+            all_indices.append(indices)
+            lengths.append(len(indices))
 
-    # Create network and move to GPU
-    network = DeepAveragingNetwork(embedding_layer, embedding_dim, hidden_size, num_classes=2, dropout=0.3)
+        max_len = max(lengths)
+        padded = [idx + [0] * (max_len - len(idx)) for idx in all_indices]
+
+        x = torch.tensor(padded, dtype=torch.long).to(device)
+        lengths_tensor = torch.tensor(lengths, dtype=torch.long).to(device)
+
+        with torch.no_grad():
+            log_probs = network(x, lengths_tensor)
+            preds = torch.argmax(log_probs, dim=1)
+            labels = torch.tensor([ex.label for ex in batch_exs], dtype=torch.long).to(device)
+            correct += (preds == labels).sum().item()
+
+    network.train()
+    return correct / total
+
+
+def _train_neural_with_metrics(network: nn.Module, train_exs: List[SentimentExample],
+                                dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings,
+                                batch_size: int = 1, num_epochs: int = 20, lr: float = 0.0005,
+                                weight_decay: float = 1e-5):
+    """
+    Generic neural training loop. Returns (trained_network, metrics_dict).
+    metrics_dict has keys: "loss", "train_acc", "dev_acc" (lists per epoch).
+    """
     network.to(device)
-
-    # Optimizer with weight decay
     optimizer = optim.Adam(network.parameters(), lr=lr, weight_decay=weight_decay)
-
-    # Loss function
     loss_fn = nn.NLLLoss()
-
-    # Training
-    batch_size = args.batch_size
     word_indexer = word_embeddings.word_indexer
 
+    metrics = {"loss": [], "train_acc": [], "dev_acc": []}
     network.train()
 
     for epoch in range(num_epochs):
-        # Shuffle training data
         indices = list(range(len(train_exs)))
         random.shuffle(indices)
 
@@ -734,35 +735,26 @@ def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_ex
         num_batches = 0
 
         if batch_size == 1:
-            # Non-batched training
             for i in indices:
                 ex = train_exs[i]
-
-                # Convert words to indices
                 word_indices = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
                 word_indices = [idx if idx != -1 else 1 for idx in word_indices]
 
-                # Create tensors and move to device
                 x = torch.tensor(word_indices, dtype=torch.long).to(device)
                 y = torch.tensor(ex.label, dtype=torch.long).to(device)
 
-                # Forward pass
                 optimizer.zero_grad()
                 log_probs = network(x)
                 loss = loss_fn(log_probs.unsqueeze(0), y.unsqueeze(0))
-
-                # Backward pass
                 loss.backward()
                 optimizer.step()
 
                 total_loss += loss.item()
                 num_batches += 1
         else:
-            # Batched training (Exploration task)
             for batch_start in range(0, len(indices), batch_size):
                 batch_indices = indices[batch_start:batch_start + batch_size]
 
-                # Prepare batch
                 batch_words = []
                 batch_labels = []
                 lengths = []
@@ -775,32 +767,137 @@ def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_ex
                     batch_labels.append(ex.label)
                     lengths.append(len(word_idx))
 
-                # Pad sequences
                 max_len = max(lengths)
                 padded = [w + [0] * (max_len - len(w)) for w in batch_words]
 
-                # Create tensors and move to device
                 x = torch.tensor(padded, dtype=torch.long).to(device)
                 y = torch.tensor(batch_labels, dtype=torch.long).to(device)
                 lengths_tensor = torch.tensor(lengths, dtype=torch.long).to(device)
 
-                # Forward pass
                 optimizer.zero_grad()
                 log_probs = network(x, lengths_tensor)
                 loss = loss_fn(log_probs, y)
-
-                # Backward pass
                 loss.backward()
                 optimizer.step()
 
                 total_loss += loss.item()
                 num_batches += 1
 
-        # Print progress
         avg_loss = total_loss / num_batches
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.4f}")
+        metrics["loss"].append(avg_loss)
 
-    return NeuralSentimentClassifier(network, word_embeddings)
+        train_acc = _compute_neural_accuracy(network, train_exs, word_embeddings)
+        dev_acc = _compute_neural_accuracy(network, dev_exs, word_embeddings)
+        metrics["train_acc"].append(train_acc)
+        metrics["dev_acc"].append(dev_acc)
+
+        print(f"  Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.4f}, Train Acc: {train_acc:.4f}, Dev Acc: {dev_acc:.4f}")
+
+    return network, metrics
+
+
+def plot_neural_metrics(all_metrics: dict, output_dir: str = "media"):
+    """
+    Plot loss and accuracy over epochs for multiple neural configurations.
+    Generates 2 plots: neural_loss.png and neural_accuracy.png.
+    """
+    import matplotlib.pyplot as plt
+    import os
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+    markers = ['o', 's', '^', 'D']
+
+    # Plot 1: Loss
+    plt.figure(figsize=(8, 5))
+    for i, (name, metrics) in enumerate(all_metrics.items()):
+        plt.plot(range(1, len(metrics["loss"]) + 1), metrics["loss"],
+                 color=colors[i % len(colors)], marker=markers[i % len(markers)],
+                 label=name, linewidth=1.5, markersize=4)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Neural Models Training Loss")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(f"{output_dir}/neural_loss.png", dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # Plot 2: Combined Train + Dev Accuracy
+    plt.figure(figsize=(8, 5))
+    for i, (name, metrics) in enumerate(all_metrics.items()):
+        epochs = range(1, len(metrics["train_acc"]) + 1)
+        plt.plot(epochs, [acc * 100 for acc in metrics["train_acc"]],
+                 color=colors[i % len(colors)], linestyle='-', label=f"{name} (train)", linewidth=1.5)
+        plt.plot(epochs, [acc * 100 for acc in metrics["dev_acc"]],
+                 color=colors[i % len(colors)], linestyle='--', label=f"{name} (dev)", linewidth=1.5)
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy (%)")
+    plt.title("Neural Models Accuracy")
+    plt.legend(ncol=2, fontsize='small')
+    plt.grid(True, alpha=0.3)
+    plt.savefig(f"{output_dir}/neural_accuracy.png", dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"Neural plots saved to {output_dir}/")
+
+
+def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings) -> NeuralSentimentClassifier:
+    """
+    Main entry point for your deep averaging network model.
+    Trains all 4 neural scenarios (DAN, DAN+B, LSTM, CNN), generates plots,
+    and returns the primary DAN (batch_size=1) classifier for evaluation.
+    """
+    hidden_size = 150
+    num_epochs = 20
+    lr = 0.0005
+    weight_decay = 1e-5
+    dropout = 0.3
+    embedding_dim = word_embeddings.get_embedding_length()
+
+    all_metrics = {}
+
+    # Define the 4 experiments: (name, network_class, batch_size)
+    experiments = [
+        ("DAN", DeepAveragingNetwork, 1),
+        ("DAN+B", DeepAveragingNetwork, 32),
+        ("LSTM", LSTMSentimentClassifier, 32),
+        ("CNN", CNNSentimentClassifier, 32),
+    ]
+
+    dan_network = None  # Will hold the primary DAN network for return
+
+    for name, NetworkClass, batch_size in experiments:
+        print(f"\n--- Training {name} (batch_size={batch_size}) ---")
+
+        # Reset seeds for reproducibility
+        random.seed(42)
+        np.random.seed(42)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+
+        # Fresh embedding layer per model
+        embedding_layer = word_embeddings.get_initialized_embedding_layer(frozen=True)
+
+        # Create network
+        network = NetworkClass(embedding_layer, embedding_dim, hidden_size, num_classes=2, dropout=dropout)
+
+        # Train with metrics
+        trained_network, metrics = _train_neural_with_metrics(
+            network, train_exs, dev_exs, word_embeddings,
+            batch_size=batch_size, num_epochs=num_epochs, lr=lr, weight_decay=weight_decay
+        )
+
+        all_metrics[name] = metrics
+
+        # Keep the primary DAN (batch_size=1) for return
+        if name == "DAN":
+            dan_network = trained_network
+
+    # Generate plots
+    plot_neural_metrics(all_metrics, output_dir="media")
+
+    return NeuralSentimentClassifier(dan_network, word_embeddings)
 
 
 def train_lstm_classifier(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings) -> NeuralSentimentClassifier:
