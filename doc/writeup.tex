@@ -1,0 +1,176 @@
+\documentclass[11pt]{article}
+
+% ACL style
+\usepackage{acl}
+
+% Standard packages
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+
+% Recommended packages
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{placeins}
+
+\title{Linear and Neural Sentiment Classification}
+
+\author{
+  Qifan Wen \\
+  \texttt{wen.679@osu.edu}
+}
+
+\begin{document}
+\setlength{\intextsep}{0pt}
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{0pt}
+\maketitle
+
+\section{Logistic Regression}
+
+\subsection{Training Configuration}\vspace{-0.4em}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lp{4.5cm}@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Initial learning rate & 0.5 \\
+Learning rate decay & 0.95 per epoch \\
+Batch size & 1 (SGD) \\
+Number of epochs & 30 \\
+Weight initialization & $U(-0.1, 0.1)$ \\
+Random seed & 42 \\
+Numerical stability & Clip to $[-500, 500]$ \\
+\bottomrule
+\end{tabular}
+\caption{Logistic Regression training configuration.}
+\label{tab:lr-config}
+\end{table}
+
+\subsection{Results Table}\vspace{-0.31em}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & \textbf{Unigram} & \textbf{Bigram} & \textbf{Better} \\
+\midrule
+Train Accuracy & 99.9\% & 100.0\% & 100.0\% \\
+Dev Accuracy & 77.5\% & 77.2\% & 77.1\% \\
+Precision & 77.1\% & 76.3\% & 76.1\% \\
+Recall & 79.5\% & 80.0\% & 80.2\% \\
+F1 Score & 78.3\% & 78.1\% & 78.1\% \\
+\bottomrule
+\end{tabular}
+\caption{Feature extractor comparison (lr=0.5, decay=0.95).}
+\label{tab:lr-features}
+\end{table}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & \textbf{Fixed} & \textbf{Default} & \textbf{Aggressive} \\
+ & (1.0) & (0.95) & (0.8) \\
+\midrule
+Train Acc & 100.0\% & 99.9\% & 99.4\% \\
+Dev Acc & 77.8\% & 77.5\% & 78.0\% \\
+Precision & 77.2\% & 77.1\% & 77.2\% \\
+Recall & 80.0\% & 79.5\% & 80.6\% \\
+F1 Score & 78.5\% & 78.3\% & 78.9\% \\
+\bottomrule
+\end{tabular}
+\caption{Learning rate schedule comparison (Unigram features).}
+\label{tab:lr-schedule}
+\end{table}
+
+\FloatBarrier
+\subsection{Loss Over Epochs Plot}\vspace{-0.5em}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\columnwidth]{../media/lr_epoch_loss.png}
+\caption{Training loss comparison across all 5 LR configurations. Richer features (Bigram, Better) converge fastest; aggressive decay plateaus early at higher loss.}
+\label{fig:lr-loss}
+\end{figure}
+
+\FloatBarrier
+\subsection{Analysis}
+
+All three feature extractors achieve similar dev accuracy (77.1\%--77.5\%), with Unigram performing best despite being simplest. Bigram and Better achieve perfect training accuracy (100\%) but do not improve generalization, suggesting overfitting---adding more features allows memorization without better discriminative power. Aggressive learning rate decay (0.8) yields the best dev accuracy (78.0\%) and F1 (78.9\%) despite lowest train accuracy (99.4\%), acting as implicit regularization.
+
+As shown in Figure~\ref{fig:lr-loss}, richer features (Bigram, Better) converge fastest (by epoch 4--5) due to larger feature spaces (86K--192K vs 15K for Unigram), while aggressive decay plateaus early ($\sim$0.056 final loss) as the learning rate diminishes too quickly. All models show overfitting (train $\sim$100\% vs dev $\sim$77--78\%), with recall consistently higher than precision across configurations.
+
+\FloatBarrier
+\section{Deep Averaging Network}
+
+\subsection{Training Configuration}\vspace{-0.5em}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Parameter} & \textbf{DAN} & \textbf{DAN+B} & \textbf{LSTM} & \textbf{CNN} \\
+\midrule
+Learning Rate & 0.001 & 0.001 & 0.001 & 0.001 \\
+Batch Size & 1 & 32 & 32 & 32 \\
+Epochs & 10 & 10 & 10 & 10 \\
+Hidden Size & 100 & 100 & 100 & 100 \\
+Dropout & 0.3 & 0.3 & 0.3 & 0.3 \\
+Optimizer & Adam & Adam & Adam & Adam \\
+\bottomrule
+\end{tabular}
+\caption{Neural model training configuration. All models use frozen 300d GloVe embeddings, NLLLoss, and Xavier initialization with seed 42.}
+\label{tab:nn-config}
+\end{table}
+
+\textbf{Architecture Notes:}
+\begin{itemize}
+    \item \textbf{DAN:} Avg embedding $\to$ FC(300$\to$100) $\to$ ReLU $\to$ Drop $\to$ FC(100$\to$100) $\to$ ReLU $\to$ Drop $\to$ FC(100$\to$2) $\to$ LogSoftmax
+    \item \textbf{LSTM:} BiLSTM(300$\to$100) $\to$ Concat hidden $\to$ Drop $\to$ FC(200$\to$2) $\to$ LogSoftmax
+    \item \textbf{CNN:} Conv1d (kernels 2,3,4,5 $\times$ 25) $\to$ ReLU $\to$ MaxPool $\to$ Concat $\to$ Drop $\to$ FC(100$\to$2) $\to$ LogSoftmax
+\end{itemize}
+
+\subsection{Results Table}\vspace{-0.2em}
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Model} & \textbf{Train} & \textbf{Dev} & \textbf{Prec} & \textbf{Rec} & \textbf{F1} \\
+\midrule
+DAN & 84.1\% & 77.4\% & 77.1\% & 79.1\% & 78.1\% \\
+DAN+B & 85.3\% & 78.6\% & 75.1\% & 86.5\% & 80.4\% \\
+LSTM & 98.1\% & 82.5\% & 79.9\% & 87.6\% & 83.6\% \\
+CNN & 99.8\% & 81.2\% & 79.9\% & 84.2\% & 82.0\% \\
+\bottomrule
+\end{tabular}
+\caption{Neural model performance comparison. DAN+B denotes DAN with mini-batch training (batch size 32).}
+\label{tab:nn-results}
+\end{table}
+
+\FloatBarrier
+\subsection{Loss Over Epochs Plot}\vspace{-0.5em}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\columnwidth]{../media/neural_models_loss.png}
+\caption{Training loss curves for all 4 neural models over 10 epochs. DAN models plateau at higher loss ($\sim$0.37--0.40), while LSTM and CNN achieve much lower final loss ($\sim$0.07--0.11), correlating with their higher train accuracies.}
+\label{fig:neural-loss}
+\end{figure}
+
+\FloatBarrier
+\subsection{Analysis}
+
+The LSTM achieves the best dev accuracy (82.5\%) and F1 score (83.6\%), demonstrating that sequential modeling captures valuable word order information that averaging-based DAN approaches miss. Mini-batch training improves DAN generalization (+1.2\% dev accuracy, +2.3\% F1) by providing regularization through noisier gradient estimates. CNN achieves strong train accuracy (99.8\%) but slightly lower dev accuracy (81.2\%) than LSTM, suggesting overfitting to local n-gram patterns rather than global sentence semantics.
+
+As shown in Figure~\ref{fig:neural-loss}, CNN and LSTM converge to much lower training loss ($\sim$0.07--0.11) compared to DAN models ($\sim$0.37--0.40), correlating with their higher model capacity and train accuracies. All neural models outperform the LR baseline (77.5\% dev), with frozen GloVe embeddings providing a strong foundation. The precision-recall trade-off varies across models: LSTM achieves the best balance (79.9\%/87.6\%), while DAN+Batching favors recall (86.5\%) over precision (75.1\%).
+
+\end{document}
