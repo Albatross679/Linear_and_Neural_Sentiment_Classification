@@ -50,7 +50,6 @@ model/*.pth
 !model/.gitkeep
 
 # Output predictions and experiment logs
-output/*.txt
 !output/.gitkeep
 
 # Documentation (keep only specific PDFs)
