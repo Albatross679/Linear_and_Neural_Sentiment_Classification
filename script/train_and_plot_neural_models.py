@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Train all 4 neural models, save them, and generate a combined loss plot.
+Train all 4 neural models, save them, and generate combined plots.
 
 Models:
 1. DAN (batch_size=1)
@@ -11,6 +11,8 @@ Models:
 Outputs:
 - model/dan.pt, model/dan_batched.pt, model/lstm.pt, model/cnn.pt
 - media/neural_models_loss.png (combined loss plot)
+- media/neural_models_train_acc.png (training accuracy plot)
+- media/neural_models_dev_acc.png (dev accuracy plot)
 """
 
 import sys
@@ -31,6 +33,9 @@ from src.models import (
     DeepAveragingNetwork, LSTMSentimentClassifier, CNNSentimentClassifier,
     NeuralSentimentClassifier
 )
+
+# GPU device detection
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def set_seeds(seed=42):
@@ -69,26 +74,44 @@ def evaluate_model(model: NeuralSentimentClassifier, examples: List[SentimentExa
     return compute_metrics(predictions, labels)
 
 
-def train_with_loss_tracking(
+def predict_single(network: nn.Module, ex: SentimentExample, word_indexer) -> int:
+    """Predict label for a single example."""
+    word_indices = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
+    word_indices = [idx if idx != -1 else 1 for idx in word_indices]
+    x = torch.tensor(word_indices, dtype=torch.long).to(device)
+
+    with torch.no_grad():
+        log_probs = network(x)
+        return torch.argmax(log_probs).item()
+
+
+def train_with_metrics_tracking(
     network: nn.Module,
     train_exs: List[SentimentExample],
+    dev_exs: List[SentimentExample],
     word_embeddings: WordEmbeddings,
     args: Namespace
-) -> Tuple[nn.Module, List[float]]:
+) -> Tuple[nn.Module, List[float], List[float], List[float]]:
     """
-    Train a neural network and return epoch-level loss history.
+    Train a neural network and return epoch-level metrics history.
 
     Returns:
-        Tuple of (trained network, list of average losses per epoch)
+        Tuple of (trained network, epoch_losses, epoch_train_accs, epoch_dev_accs)
     """
-    optimizer = optim.Adam(network.parameters(), lr=args.lr)
+    # Move network to device
+    network.to(device)
+
+    optimizer = optim.Adam(network.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     loss_fn = nn.NLLLoss()
     word_indexer = word_embeddings.word_indexer
 
     network.train()
     epoch_losses = []
+    epoch_train_accs = []
+    epoch_dev_accs = []
 
     for epoch in range(args.num_epochs):
+        network.train()
         indices = list(range(len(train_exs)))
         random.shuffle(indices)
         total_loss = 0.0
@@ -101,8 +124,8 @@ def train_with_loss_tracking(
                 word_indices = [word_indexer.add_and_get_index(word, add=False) for word in ex.words]
                 word_indices = [idx if idx != -1 else 1 for idx in word_indices]
 
-                x = torch.tensor(word_indices, dtype=torch.long)
-                y = torch.tensor(ex.label, dtype=torch.long)
+                x = torch.tensor(word_indices, dtype=torch.long).to(device)
+                y = torch.tensor(ex.label, dtype=torch.long).to(device)
 
                 optimizer.zero_grad()
                 log_probs = network(x)
@@ -132,9 +155,9 @@ def train_with_loss_tracking(
                 max_len = max(lengths)
                 padded = [w + [0] * (max_len - len(w)) for w in batch_words]
 
-                x = torch.tensor(padded, dtype=torch.long)
-                y = torch.tensor(batch_labels, dtype=torch.long)
-                lengths_tensor = torch.tensor(lengths, dtype=torch.long)
+                x = torch.tensor(padded, dtype=torch.long).to(device)
+                y = torch.tensor(batch_labels, dtype=torch.long).to(device)
+                lengths_tensor = torch.tensor(lengths, dtype=torch.long).to(device)
 
                 optimizer.zero_grad()
                 log_probs = network(x, lengths_tensor)
@@ -147,9 +170,23 @@ def train_with_loss_tracking(
 
         avg_loss = total_loss / num_batches
         epoch_losses.append(avg_loss)
-        print(f"  Epoch {epoch + 1}/{args.num_epochs}, Loss: {avg_loss:.4f}")
 
-    return network, epoch_losses
+        # Evaluate train and dev accuracy at end of epoch
+        network.eval()
+
+        # Train accuracy
+        train_preds = [predict_single(network, ex, word_indexer) for ex in train_exs]
+        train_acc = sum(p == ex.label for p, ex in zip(train_preds, train_exs)) / len(train_exs)
+        epoch_train_accs.append(train_acc)
+
+        # Dev accuracy
+        dev_preds = [predict_single(network, ex, word_indexer) for ex in dev_exs]
+        dev_acc = sum(p == ex.label for p, ex in zip(dev_preds, dev_exs)) / len(dev_exs)
+        epoch_dev_accs.append(dev_acc)
+
+        print(f"  Epoch {epoch + 1}/{args.num_epochs}, Loss: {avg_loss:.4f}, Train Acc: {train_acc:.1%}, Dev Acc: {dev_acc:.1%}")
+
+    return network, epoch_losses, epoch_train_accs, epoch_dev_accs
 
 
 def create_network(model_type: str, word_embeddings: WordEmbeddings, hidden_size: int) -> nn.Module:
@@ -174,13 +211,15 @@ def plot_combined_loss(all_losses: Dict[str, List[float]], output_path: str):
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']  # Blue, Orange, Green, Red
     markers = ['o', 's', '^', 'D']  # Circle, Square, Triangle, Diamond
 
+    num_epochs = max(len(losses) for losses in all_losses.values())
+
     for i, (model_name, losses) in enumerate(all_losses.items()):
         epochs = list(range(1, len(losses) + 1))
         plt.plot(epochs, losses,
                  label=model_name,
                  color=colors[i % len(colors)],
                  marker=markers[i % len(markers)],
-                 markersize=6,
+                 markersize=5,
                  linewidth=2)
 
     plt.xlabel('Epoch', fontsize=12)
@@ -188,12 +227,80 @@ def plot_combined_loss(all_losses: Dict[str, List[float]], output_path: str):
     plt.title('Training Loss Curves for Neural Sentiment Classifiers', fontsize=14)
     plt.legend(loc='upper right', fontsize=10)
     plt.grid(True, alpha=0.3)
-    plt.xticks(range(1, 11))
+    plt.xticks(range(1, num_epochs + 1))
     plt.tight_layout()
 
     plt.savefig(output_path, dpi=150)
     plt.close()
     print(f"\nCombined loss plot saved to {output_path}")
+
+
+def plot_train_accuracy(all_train_accs: Dict[str, List[float]], output_path: str):
+    """Generate training accuracy plot for all models."""
+    plt.figure(figsize=(10, 6))
+
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']  # Blue, Orange, Green, Red
+    markers = ['o', 's', '^', 'D']  # Circle, Square, Triangle, Diamond
+
+    num_epochs = max(len(accs) for accs in all_train_accs.values())
+
+    for i, (model_name, accs) in enumerate(all_train_accs.items()):
+        epochs = list(range(1, len(accs) + 1))
+        # Convert to percentage
+        accs_pct = [a * 100 for a in accs]
+        plt.plot(epochs, accs_pct,
+                 label=model_name,
+                 color=colors[i % len(colors)],
+                 marker=markers[i % len(markers)],
+                 markersize=5,
+                 linewidth=2)
+
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Training Accuracy (%)', fontsize=12)
+    plt.title('Training Accuracy Over Epochs for Neural Sentiment Classifiers', fontsize=14)
+    plt.legend(loc='lower right', fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.xticks(range(1, num_epochs + 1))
+    plt.ylim(50, 105)
+    plt.tight_layout()
+
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    print(f"Training accuracy plot saved to {output_path}")
+
+
+def plot_dev_accuracy(all_dev_accs: Dict[str, List[float]], output_path: str):
+    """Generate dev accuracy plot for all models."""
+    plt.figure(figsize=(10, 6))
+
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']  # Blue, Orange, Green, Red
+    markers = ['o', 's', '^', 'D']  # Circle, Square, Triangle, Diamond
+
+    num_epochs = max(len(accs) for accs in all_dev_accs.values())
+
+    for i, (model_name, accs) in enumerate(all_dev_accs.items()):
+        epochs = list(range(1, len(accs) + 1))
+        # Convert to percentage
+        accs_pct = [a * 100 for a in accs]
+        plt.plot(epochs, accs_pct,
+                 label=model_name,
+                 color=colors[i % len(colors)],
+                 marker=markers[i % len(markers)],
+                 markersize=5,
+                 linewidth=2)
+
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Dev Accuracy (%)', fontsize=12)
+    plt.title('Dev Accuracy Over Epochs for Neural Sentiment Classifiers', fontsize=14)
+    plt.legend(loc='lower right', fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.xticks(range(1, num_epochs + 1))
+    plt.ylim(50, 90)
+    plt.tight_layout()
+
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    print(f"Dev accuracy plot saved to {output_path}")
 
 
 def print_results_table(results: List[dict]):
@@ -241,8 +348,13 @@ def print_results_table(results: List[dict]):
 
 
 def main():
+    # Print device info
+    print(f"Using device: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+
     # Load data
-    print("Loading training data...")
+    print("\nLoading training data...")
     train_exs = read_sentiment_examples("data/train.txt")
     print(f"Loaded {len(train_exs)} training examples")
 
@@ -266,8 +378,10 @@ def main():
         {"name": "CNN", "model": "cnn", "batch_size": 32, "save_name": "cnn.pt"},
     ]
 
-    # Track losses for all models
+    # Track all metrics for all models
     all_losses = {}
+    all_train_accs = {}
+    all_dev_accs = {}
     results = []
 
     for exp in experiments:
@@ -279,18 +393,23 @@ def main():
         set_seeds(42)
 
         args = Namespace(
-            lr=0.001,
-            num_epochs=10,
-            hidden_size=100,
-            batch_size=exp["batch_size"]
+            lr=0.0005,
+            num_epochs=20,
+            hidden_size=150,
+            batch_size=exp["batch_size"],
+            weight_decay=1e-5
         )
 
         # Create and train network
         network = create_network(exp["model"], word_embeddings, args.hidden_size)
-        network, epoch_losses = train_with_loss_tracking(network, train_exs, word_embeddings, args)
+        network, epoch_losses, epoch_train_accs, epoch_dev_accs = train_with_metrics_tracking(
+            network, train_exs, dev_exs, word_embeddings, args
+        )
 
-        # Store losses for plotting
+        # Store metrics for plotting
         all_losses[exp["name"]] = epoch_losses
+        all_train_accs[exp["name"]] = epoch_train_accs
+        all_dev_accs[exp["name"]] = epoch_dev_accs
 
         # Save model
         save_path = f"model/{exp['save_name']}"
@@ -299,11 +418,13 @@ def main():
             'model_type': exp["model"],
             'batch_size': exp["batch_size"],
             'args': vars(args),
-            'epoch_losses': epoch_losses
+            'epoch_losses': epoch_losses,
+            'epoch_train_accs': epoch_train_accs,
+            'epoch_dev_accs': epoch_dev_accs
         }, save_path)
         print(f"Model saved to {save_path}")
 
-        # Evaluate
+        # Evaluate (final metrics)
         model = NeuralSentimentClassifier(network, word_embeddings)
         train_metrics = evaluate_model(model, train_exs)
         dev_metrics = evaluate_model(model, dev_exs)
@@ -314,8 +435,10 @@ def main():
             'dev': dev_metrics
         })
 
-    # Generate combined loss plot
+    # Generate all 3 plots
     plot_combined_loss(all_losses, "media/neural_models_loss.png")
+    plot_train_accuracy(all_train_accs, "media/neural_models_train_acc.png")
+    plot_dev_accuracy(all_dev_accs, "media/neural_models_dev_acc.png")
 
     # Print results
     print_results_table(results)
@@ -325,6 +448,7 @@ def main():
     with open("output/neural_experiment_results.txt", "w") as f:
         f.write("Neural Network Experiment Results\n")
         f.write("=" * 60 + "\n\n")
+        f.write("Configuration: lr=0.0005, epochs=20, hidden_size=150, weight_decay=1e-5\n\n")
         f.write("| Model | Train Acc | Dev Acc | Precision | Recall | F1 |\n")
         f.write("|-------|-----------|---------|-----------|--------|-----|\n")
         for r in results:
