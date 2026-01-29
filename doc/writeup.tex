@@ -21,6 +21,10 @@
 \usepackage{placeins}
 \usepackage{enumitem}
 
+% TikZ for neural network diagrams
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, shapes.geometric, fit, calc, backgrounds}
+
 \title{Linear and Neural Sentiment Classification}
 
 \author{
@@ -40,15 +44,18 @@
 \toprule
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
-Initial learning rate & 0.5 \\
+Initial learning rate & 0.2 \\
 Learning rate decay & 0.95 per epoch \\
-Batch size & 1 (SGD) \\
-Number of epochs & 30 \\
+Batch size & 32 (mini-batch SGD) \\
+Number of epochs & 30 (max) \\
+L2 regularization ($\lambda$) & 0.1 \\
+Min feature count & 2 \\
+Early stopping patience & 4 epochs \\
 Weight initialization & $U(-0.1, 0.1)$ \\
 Numerical stability & Clip to $[-500, 500]$ \\
 \bottomrule
 \end{tabular}
-\caption{Logistic Regression training configuration. All models use seed 42.}
+\caption{Logistic Regression training configuration selected by random grid search (20 of 162 combinations, seed 42).}
 \label{tab:lr-config}
 \end{table}
 
@@ -59,14 +66,14 @@ Numerical stability & Clip to $[-500, 500]$ \\
 \toprule
  & \textbf{Unigram} & \textbf{Bigram} & \textbf{Better} \\
 \midrule
-Train Accuracy & 99.9\% & 100.0\% & 100.0\% \\
-Dev Accuracy & 77.5\% & 77.2\% & 77.1\% \\
-Precision & 77.1\% & 76.3\% & 76.1\% \\
-Recall & 79.5\% & 80.0\% & 80.2\% \\
-F1 Score & 78.3\% & 78.1\% & 78.1\% \\
+Train Accuracy & 81.9\% & 82.4\% & 84.4\% \\
+Dev Accuracy & 76.2\% & 76.7\% & 77.9\% \\
+Precision & 78.6\% & 77.6\% & 79.3\% \\
+Recall & 73.0\% & 76.4\% & 76.6\% \\
+F1 Score & 75.7\% & 77.0\% & 77.9\% \\
 \bottomrule
 \end{tabular}
-\caption{Feature extractor comparison (lr=0.5, decay=0.95).}
+\caption{Feature extractor comparison (lr=0.2, decay=0.95, grid-searched hyperparameters).}
 \label{tab:lr-features}
 \end{table}
 \begin{table}[H]
@@ -77,14 +84,14 @@ F1 Score & 78.3\% & 78.1\% & 78.1\% \\
  & \textbf{Fixed} & \textbf{Default} & \textbf{Aggressive} \\
  & (1.0) & (0.95) & (0.8) \\
 \midrule
-Train Acc & 100.0\% & 99.9\% & 99.4\% \\
-Dev Acc & 77.8\% & 77.5\% & 78.0\% \\
-Precision & 77.2\% & 77.1\% & 77.2\% \\
-Recall & 80.0\% & 79.5\% & 80.6\% \\
-F1 Score & 78.5\% & 78.3\% & 78.9\% \\
+Train Acc & 80.0\% & 81.9\% & 88.0\% \\
+Dev Acc & 75.1\% & 76.2\% & 78.8\% \\
+Precision & 72.6\% & 78.6\% & 78.5\% \\
+Recall & 82.2\% & 73.0\% & 80.4\% \\
+F1 Score & 77.1\% & 75.7\% & 79.4\% \\
 \bottomrule
 \end{tabular}
-\caption{Learning rate schedule comparison (Unigram features).}
+\caption{Learning rate schedule comparison (Unigram features, grid-searched hyperparameters).}
 \label{tab:lr-schedule}
 \end{table}
 
@@ -102,12 +109,91 @@ F1 Score & 78.5\% & 78.3\% & 78.9\% \\
 \label{fig:lr-acc}
 \end{figure}
 
-The improved logistic regression models incorporate three enhancements: (1) \textbf{L2 regularization} ($\lambda=0.1$) prevents overfitting by penalizing large weights, (2) \textbf{TF-IDF weighting} emphasizes discriminative words over common ones, and (3) \textbf{feature frequency thresholding} (min\_count=2) removes rare/noisy features.
+The logistic regression model incorporates five enhancements selected via random grid search (20 of 162 hyperparameter combinations). Mini-batch SGD with batch size 32 provides smoother gradient estimates than per-example updates. L2 regularization ($\lambda = 0.1$) prevents overfitting by penalizing large weights. Early stopping with patience of 4 epochs halts training when dev accuracy plateaus. TF-IDF weighting emphasizes discriminative words over common ones. Feature frequency thresholding (min\_count = 2) removes rare and noisy features.
 
-As shown in Figure~\ref{fig:lr-loss}, the training loss curves are smoother with L2 regularization, and aggressive decay (0.8) still plateaus at higher loss. Figure~\ref{fig:lr-acc} shows that L2 regularization prevents perfect training accuracy, which is desirable for generalization, while the dev accuracy curves demonstrate more stable convergence across all configurations. TF-IDF weighting helps the Unigram model by down-weighting common words like ``the'' and ``a'' while emphasizing sentiment-bearing terms. Feature thresholding reduces noise from rare bigrams/trigrams that appear only once in training.
-
+Two exploration tasks were implemented to evaluate how feature selection and learning rate decay affect model performance. Better feature selection significantly improves performance, while learning rate decay has only limited impact.
 \FloatBarrier
 \section{Deep Averaging Network}
+
+% TikZ styles for neural network diagrams
+\tikzset{
+    layer/.style={rectangle, draw=black, thick, minimum width=1.4cm, minimum height=0.5cm, align=center, font=\tiny},
+    embedding/.style={layer, fill=blue!20},
+    operation/.style={layer, fill=green!20, rounded corners=2pt},
+    hidden/.style={layer, fill=orange!20},
+    output/.style={layer, fill=red!20},
+    input/.style={layer, fill=gray!20},
+    arrow/.style={-{Stealth[length=1.5mm]}, thick},
+}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.4cm]
+    % DAN Architecture
+    \begin{scope}[local bounding box=dan]
+        \node[input] (dan_input) {Input};
+        \node[embedding, above=of dan_input] (dan_embed) {Embed (300)};
+        \node[operation, above=of dan_embed] (dan_avg) {Avg Pool};
+        \node[hidden, above=of dan_avg] (dan_fc1) {FC+ReLU};
+        \node[hidden, above=of dan_fc1] (dan_fc2) {FC+ReLU};
+        \node[output, above=of dan_fc2] (dan_out) {FC (2)};
+
+        \draw[arrow] (dan_input) -- (dan_embed);
+        \draw[arrow] (dan_embed) -- (dan_avg);
+        \draw[arrow] (dan_avg) -- (dan_fc1);
+        \draw[arrow] (dan_fc1) -- (dan_fc2);
+        \draw[arrow] (dan_fc2) -- (dan_out);
+
+        \node[below=0.05cm of dan_input, font=\scriptsize\bfseries] {(a) DAN};
+    \end{scope}
+
+    % LSTM Architecture
+    \begin{scope}[xshift=2.4cm, local bounding box=lstm]
+        \node[input] (lstm_input) {Input};
+        \node[embedding, above=of lstm_input] (lstm_embed) {Embed (300)};
+        \node[operation, above=of lstm_embed] (lstm_cell) {BiLSTM};
+        \node[operation, above=of lstm_cell] (lstm_concat) {Concat};
+        \node[output, above=of lstm_concat] (lstm_out) {FC (2)};
+
+        \draw[arrow] (lstm_input) -- (lstm_embed);
+        \draw[arrow] (lstm_embed) -- (lstm_cell);
+        \draw[arrow] (lstm_cell) -- (lstm_concat);
+        \draw[arrow] (lstm_concat) -- (lstm_out);
+
+        \node[below=0.05cm of lstm_input, font=\scriptsize\bfseries] {(b) LSTM};
+    \end{scope}
+
+    % CNN Architecture
+    \begin{scope}[xshift=4.8cm, local bounding box=cnn]
+        \node[input] (cnn_input) {Input};
+        \node[embedding, above=of cnn_input] (cnn_embed) {Embed (300)};
+
+        % Multiple conv filters - more compact
+        \node[operation, above=0.4cm of cnn_embed, xshift=-0.45cm, minimum width=0.5cm] (conv1) {\tiny 2};
+        \node[operation, right=0.05cm of conv1, minimum width=0.5cm] (conv2) {\tiny 3};
+        \node[operation, right=0.05cm of conv2, minimum width=0.5cm] (conv3) {\tiny 4};
+        \node[operation, right=0.05cm of conv3, minimum width=0.5cm] (conv4) {\tiny 5};
+
+        \node[operation, above=0.35cm of $(conv2)!0.5!(conv3)$] (cnn_pool) {MaxPool};
+        \node[output, above=of cnn_pool] (cnn_out) {FC (2)};
+
+        \draw[arrow] (cnn_input) -- (cnn_embed);
+        \draw[arrow] (cnn_embed) -- (conv1.south);
+        \draw[arrow] (cnn_embed) -- (conv2.south);
+        \draw[arrow] (cnn_embed) -- (conv3.south);
+        \draw[arrow] (cnn_embed) -- (conv4.south);
+        \draw[arrow] (conv1.north) -- (cnn_pool.south west);
+        \draw[arrow] (conv2.north) -- (cnn_pool.south);
+        \draw[arrow] (conv3.north) -- (cnn_pool.south);
+        \draw[arrow] (conv4.north) -- (cnn_pool.south east);
+        \draw[arrow] (cnn_pool) -- (cnn_out);
+
+        \node[below=0.05cm of cnn_input, font=\scriptsize\bfseries] {(c) CNN};
+    \end{scope}
+\end{tikzpicture}
+\caption{Neural architectures.}
+\label{fig:nn-arch}
+\end{figure}
 
 \begin{table}[H]
 \centering
@@ -160,7 +246,7 @@ CNN & 100.0\% & 82.6\% & 82.4\% & 83.6\% & 83.0\% \\
 \label{fig:neural-acc}
 \end{figure}
 
-The CNN achieves the best dev accuracy (82.6\%) and F1 score (83.0\%), demonstrating that local n-gram patterns captured by convolutional filters are highly effective for sentiment classification. Mini-batch training improves DAN generalization (+1.6\% dev accuracy) by providing regularization through noisier gradient estimates. LSTM achieves near-perfect training accuracy (99.4\%) but shows more variance in dev accuracy, indicating some sensitivity to sequential patterns.
+Two exploration tasks were implemented. The CNN achieves the best dev accuracy (82.6\%) and F1 score (83.0\%), demonstrating that local n-gram patterns captured by convolutional filters are highly effective for sentiment classification. Mini-batch training improves DAN generalization (+1.6\% dev accuracy). LSTM achieves near-perfect training accuracy (99.4\%) but shows more variance in dev accuracy.
 
 As shown in Figure~\ref{fig:neural-loss}, CNN and LSTM converge to much lower training loss compared to DAN models, correlating with their higher model capacity. The accuracy curves (Figure~\ref{fig:neural-acc}) show CNN reaching 100\% training accuracy fastest, while DAN models plateau around 90\%; on the dev set, CNN maintains the most stable generalization, peaking around 82\% dev accuracy. All neural models outperform the LR baseline (77.5\% dev), with frozen GloVe embeddings and weight decay regularization providing a strong foundation. The precision-recall trade-off varies: CNN achieves the best balance (82.4\%/83.6\%), while LSTM favors recall (85.8\%) over precision (75.9\%).
 
