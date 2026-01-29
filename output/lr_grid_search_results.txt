@@ -1,0 +1,61 @@
+Namespace(model='LR', train_path='data/train.txt', dev_path='data/dev.txt', blind_test_path='data/test-blind.txt', test_output_path='test-blind.output.txt', run_on_test=False, word_vecs_path='data/glove.6B.300d-relativized.txt', lr=0.001, feats='BETTER', num_epochs=10, hidden_size=100, batch_size=1)
+6920 / 872 / 1821 train/dev/test examples
+Read in 14923 vectors of size 300
+
+=== LR Grid Search: testing 20 of 162 combinations ===
+  [1/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 4, 'min_count': 3, 'batch_size': 32, 'initial_lr': 0.3} -> dev_acc=0.7213
+  [2/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 3, 'min_count': 3, 'batch_size': 16, 'initial_lr': 0.5} -> dev_acc=0.6537
+  [3/20] params={'lambda_reg': 0.5, 'early_stopping_patience': 3, 'min_count': 5, 'batch_size': 32, 'initial_lr': 0.3} -> dev_acc=0.6778
+  [4/20] params={'lambda_reg': 0.5, 'early_stopping_patience': 3, 'min_count': 3, 'batch_size': 16, 'initial_lr': 0.2} -> dev_acc=0.6250
+  [5/20] params={'lambda_reg': 0.5, 'early_stopping_patience': 3, 'min_count': 2, 'batch_size': 32, 'initial_lr': 0.5} -> dev_acc=0.6376
+  [6/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 4, 'min_count': 5, 'batch_size': 32, 'initial_lr': 0.2} -> dev_acc=0.7466
+  [7/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 4, 'min_count': 3, 'batch_size': 16, 'initial_lr': 0.2} -> dev_acc=0.7099
+  [8/20] params={'lambda_reg': 0.8, 'early_stopping_patience': 4, 'min_count': 5, 'batch_size': 16, 'initial_lr': 0.3} -> dev_acc=0.5218
+  [9/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 4, 'min_count': 2, 'batch_size': 32, 'initial_lr': 0.3} -> dev_acc=0.7466
+  [10/20] params={'lambda_reg': 0.8, 'early_stopping_patience': 5, 'min_count': 3, 'batch_size': 16, 'initial_lr': 0.3} -> dev_acc=0.6284
+  [11/20] params={'lambda_reg': 0.8, 'early_stopping_patience': 3, 'min_count': 2, 'batch_size': 16, 'initial_lr': 0.5} -> dev_acc=0.5642
+  [12/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 3, 'min_count': 3, 'batch_size': 16, 'initial_lr': 0.2} -> dev_acc=0.7099
+  [13/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 3, 'min_count': 3, 'batch_size': 16, 'initial_lr': 0.3} -> dev_acc=0.6697
+  [14/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 4, 'min_count': 2, 'batch_size': 32, 'initial_lr': 0.2} -> dev_acc=0.7833
+  [15/20] params={'lambda_reg': 0.5, 'early_stopping_patience': 3, 'min_count': 2, 'batch_size': 16, 'initial_lr': 0.3} -> dev_acc=0.6273
+  [16/20] params={'lambda_reg': 0.5, 'early_stopping_patience': 3, 'min_count': 2, 'batch_size': 32, 'initial_lr': 0.2} -> dev_acc=0.6479
+  [17/20] params={'lambda_reg': 0.8, 'early_stopping_patience': 4, 'min_count': 2, 'batch_size': 32, 'initial_lr': 0.5} -> dev_acc=0.5550
+  [18/20] params={'lambda_reg': 0.8, 'early_stopping_patience': 5, 'min_count': 3, 'batch_size': 32, 'initial_lr': 0.3} -> dev_acc=0.6548
+  [19/20] params={'lambda_reg': 0.8, 'early_stopping_patience': 4, 'min_count': 5, 'batch_size': 32, 'initial_lr': 0.2} -> dev_acc=0.6560
+  [20/20] params={'lambda_reg': 0.1, 'early_stopping_patience': 5, 'min_count': 5, 'batch_size': 16, 'initial_lr': 0.2} -> dev_acc=0.7431
+
+=== Best params (dev_acc=0.7833): {'lambda_reg': 0.1, 'early_stopping_patience': 4, 'min_count': 2, 'batch_size': 32, 'initial_lr': 0.2} ===
+
+
+=== Training 5 LR configurations with best params ===
+  Training Unigram (lr_decay=0.95)...
+    Unigram: Train Acc=0.8188, Dev Acc=0.7615, Prec=0.7864, Rec=0.7297, F1=0.7570
+  Training Bigram (lr_decay=0.95)...
+    Bigram: Train Acc=0.8236, Dev Acc=0.7672, Prec=0.7757, Rec=0.7635, F1=0.7696
+  Training Better (lr_decay=0.95)...
+    Better: Train Acc=0.8441, Dev Acc=0.7787, Prec=0.7925, Rec=0.7658, F1=0.7789
+  Training Unigram (Fixed LR) (lr_decay=1.0)...
+    Unigram (Fixed LR): Train Acc=0.8000, Dev Acc=0.7511, Prec=0.7256, Rec=0.8221, F1=0.7709
+  Training Unigram (Aggressive) (lr_decay=0.8)...
+    Unigram (Aggressive): Train Acc=0.8796, Dev Acc=0.7878, Prec=0.7846, Rec=0.8041, F1=0.7942
+LR plots saved to media/
+=====Train Accuracy=====
+Accuracy: 5841 / 6920 = 0.844075;
+Precision (fraction of predicted positives that are correct): 2986 / 3441 = 0.867771;
+Recall (fraction of true positives predicted correctly): 2986 / 3610 = 0.827147;
+F1 (harmonic mean of precision and recall): 0.846972;
+
+=====Dev Accuracy=====
+Accuracy: 679 / 872 = 0.778670;
+Precision (fraction of predicted positives that are correct): 340 / 429 = 0.792541;
+Recall (fraction of true positives predicted correctly): 340 / 444 = 0.765766;
+F1 (harmonic mean of precision and recall): 0.778923;
+
+Time for training and evaluation: 162.58 seconds
+=====Results=====
+{
+  "dev_acc": 0.7786697247706422,
+  "dev_f1": 0.7789232531500573,
+  "execution_time": 162.5801661014557,
+  "output": "Accuracy: 679 / 872 = 0.778670;\nPrecision (fraction of predicted positives that are correct): 340 / 429 = 0.792541;\nRecall (fraction of true positives predicted correctly): 340 / 444 = 0.765766;\nF1 (harmonic mean of precision and recall): 0.778923;\n"
+}

@@ -256,14 +256,14 @@ def compute_lr_eval_metrics(model: LogisticRegressionClassifier, exs: List[Senti
 
 def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor: FeatureExtractor,
                               dev_exs: List[SentimentExample] = None,
-                              lr_decay: float = 0.8,
+                              lr_decay: float = 0.95,
                               return_metrics: bool = False,
-                              initial_lr: float = 0.2,
+                              initial_lr: float = 0.5,
                               lambda_reg: float = 0.1,
                               min_count: int = 2,
-                              batch_size: int = 32,
+                              batch_size: int = 1,
                               num_epochs: int = 30,
-                              early_stopping_patience: int = 4) -> LogisticRegressionClassifier:
+                              early_stopping_patience: int = 0) -> LogisticRegressionClassifier:
     """
     Train a logistic regression model.
     :param train_exs: training set, List of SentimentExample objects
@@ -591,9 +591,9 @@ def train_linear_model(args, train_exs: List[SentimentExample], dev_exs: List[Se
 
         return better_model
     else:
-        # UNIGRAM or BIGRAM: use best hyperparameters (no grid search)
+        # UNIGRAM or BIGRAM: use original defaults, no grid search
         model, metrics = train_logistic_regression(train_exs, feat_extractor, dev_exs=dev_exs,
-                                                    return_metrics=True)
+                                                    lr_decay=0.95, return_metrics=True)
         return model
 
 
